@@ -1,0 +1,113 @@
+name: Android CI - Al-Kadi Live Barcode
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          echo "Repository structure:"
+          find . -maxdepth 3 -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "build.gradle" -o -name "build.gradle.kts" \) -print
+
+          PROJECT_DIR="."
+          if [ ! -f "./settings.gradle" ] && [ ! -f "./settings.gradle.kts" ]; then
+            FOUND_SETTINGS=$(find . -maxdepth 3 -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+            if [ -n "$FOUND_SETTINGS" ]; then
+              PROJECT_DIR=$(dirname "$FOUND_SETTINGS")
+            fi
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using Android project directory: $PROJECT_DIR"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" \
+                     "platforms;android-34" \
+                     "platforms;android-35" \
+                     "build-tools;34.0.0" \
+                     "build-tools;35.0.0"
+
+      - name: Ensure AndroidX is enabled
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ ! -f gradle.properties ]; then
+            touch gradle.properties
+          fi
+
+          grep -q "^android.useAndroidX=true" gradle.properties || echo "android.useAndroidX=true" >> gradle.properties
+          grep -q "^android.enableJetifier=true" gradle.properties || echo "android.enableJetifier=true" >> gradle.properties
+          grep -q "^org.gradle.jvmargs=" gradle.properties || echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+
+          echo "gradle.properties:"
+          cat gradle.properties
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+
+          echo "Current directory:"
+          pwd
+
+          echo "Project files:"
+          ls -la
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew clean :app:assembleDebug --no-daemon --stacktrace
+          else
+            gradle clean :app:assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: Show generated APK files
+        if: always()
+        run: |
+          echo "Searching for generated APK files..."
+          find . -type f -name "*.apk" -print
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: al-kadi-live-barcode-debug-apk
+          path: '**/build/outputs/apk/debug/*.apk'
+          if-no-files-found: error
